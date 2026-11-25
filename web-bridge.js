@@ -105,7 +105,8 @@
     let saved = null;
     if (state.user) { const r = await pullKey('system_prompts'); if (r.ok && Array.isArray(r.value)) { LS.set('ss_prompts', r.value); saved = r.value; } }
     if (!saved) saved = LS.get('ss_prompts', null);
-    if (!saved || !saved.length) saved = (window.__defaultPrompts || []).slice();
+    saved = (saved || []).slice();
+    for (const d of (window.__defaultPrompts || [])) if (!saved.some(p => p && p.id === d.id)) saved.push(d); // Finance Advisor + General, like main.js always serves
     return withContentPrompts(saved);
   }
   async function saveSystemPrompts(p) { const own = (p || []).filter(x => !/^content-/.test(x.id || '')); LS.set('ss_prompts', own); if (state.user) await pushKey('system_prompts', own); return true; }
