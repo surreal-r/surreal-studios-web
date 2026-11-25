@@ -13,11 +13,11 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
-<script src="./vendor/supabase.js?v=20261125-0348"></script>
-<script src="./crm-web.js?v=20261125-0348"></script>
-<script src="./web-bridge.js?v=20261125-0348"></script>
+<script src="./vendor/supabase.js?v=20261125-0356"></script>
+<script src="./crm-web.js?v=20261125-0356"></script>
+<script src="./web-bridge.js?v=20261125-0356"></script>
 <title>Surreal Studios</title>
-<!-- web build 20261125-0348 -->
+<!-- web build 20261125-0356 -->
 <link href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -2143,20 +2143,19 @@ window.surreal.onStudioUpdate&&window.surreal.onStudioUpdate(()=>{if(S.page==='s
 
   // cloud chip: on phones it lives in the titlebar, not over the content
   const chipSlot = mk('div', { id: 'mChipSlot' }, titlebar);
-  let chipObserved = false;
+  let chipTxt = null;
   const SHORT = { 'LOCAL ONLY — CLICK TO LINK': 'TAP TO LINK', 'SYNC PENDING': 'SYNCING', 'SYNC PENDING · BANK': 'SYNCING', 'SYNCED · BANK': 'SYNCED' };
+  const shorten = () => { if (!chipTxt || !narrow()) return; const s = SHORT[chipTxt.textContent]; if (s) chipTxt.textContent = s; };
   const placeChip = () => {
     const chip = [...document.body.children, ...chipSlot.children].find(d => d.tagName === 'DIV' && d.style.borderRadius === '20px' && d.children.length === 2);
     if (!chip) return false;
     if (narrow()) { if (chip.parentElement !== chipSlot) chipSlot.appendChild(chip); }
     else if (chip.parentElement !== document.body) document.body.appendChild(chip);
-    if (!chipObserved) {
-      chipObserved = true;
-      const txt = chip.children[1];
-      const shorten = () => { if (!narrow()) return; const s = SHORT[txt.textContent]; if (s) txt.textContent = s; };
-      new MutationObserver(shorten).observe(txt, { childList: true, characterData: true, subtree: true });
-      shorten();
+    if (!chipTxt) {
+      chipTxt = chip.children[1];
+      new MutationObserver(shorten).observe(chipTxt, { childList: true, characterData: true, subtree: true });
     }
+    shorten();
     return true;
   };
   window.addEventListener('resize', placeChip);

@@ -1,4 +1,4 @@
-const C='ss-web-20261125-0348';
+const C='ss-web-20261125-0356';
 const SHELL=['./','./index.html','./web-bridge.js','./crm-web.js','./vendor/supabase.js','./manifest.webmanifest','./icons/icon-192.png'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(C).then(c=>c.addAll(SHELL).catch(()=>{})).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>k!==C).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});
