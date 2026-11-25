@@ -6,7 +6,7 @@
  */
 (function () {
   const CFG = { url: 'https://agwufkqbmjxolsjfcjms.supabase.co', key: 'sb_publishable_b8eG32OdgtfWHRgRvvaOqw_65NEjjXp' };
-  const WEB_VERSION = 'web 1.9.0';
+  const WEB_VERSION = 'web 1.9.1';
   const SYNC_FIELDS = ['bankAccounts', 'bankTransactions', 'bankSyncStatus', 'socialMetrics', 'socialHistory', 'excludedSequenceAccounts', '_migrationVersion'];
   const POLL_MS = 45 * 1000;
   const LS = {
@@ -69,9 +69,9 @@
   }
 
   // ── polling: the phone sees what the Macs and the engine write ──
-  function startPoll() { stopPoll(); state.pollTimer = setInterval(() => { pullData('poll').catch(() => {}); if (state.crm) crmPull('poll').catch(() => {}); }, POLL_MS); }
+  function startPoll() { stopPoll(); state.pollTimer = setInterval(() => { pullData('poll').catch(() => {}); if (state.crm) crmPull('poll').catch(() => {}); if (state.content) contentPull('poll').catch(() => {}); }, POLL_MS); }
   function stopPoll() { if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; } }
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && state.user) { pullData('resume').catch(() => {}); if (state.crm) crmPull('resume').catch(() => {}); } });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && state.user) { pullData('resume').catch(() => {}); if (state.crm) crmPull('resume').catch(() => {}); if (state.content) contentPull('resume').catch(() => {}); brainPull(false).catch(() => {}); } });
 
   // ── conversations + prompts ──
   async function getConversations() {
@@ -87,11 +87,28 @@
     if (rows.length) await sb.from('conversations').upsert(rows, { onConflict: 'user_id,id' });
     return true;
   }
-  async function getSystemPrompts() {
-    if (state.user) { const r = await pullKey('system_prompts'); if (r.ok && Array.isArray(r.value)) { LS.set('ss_prompts', r.value); return r.value; } }
-    return LS.get('ss_prompts', []);
+  // same shape main.js serves: saved prompts + the content prompts spliced in (never persisted twice)
+  function withContentPrompts(list) {
+    try {
+      const PROMPTS = (window.__contentPrompts || {}).PROMPTS || [];
+      const out = (list || []).filter(p => !/^content-/.test(p.id || ''));
+      const existing = list || [];
+      for (const p of PROMPTS) {
+        const idx = existing.findIndex(x => x.id === p.id);
+        const rec = { id: p.id, name: p.name, prompt: p.prompt, brain: true, group: 'content', tools: p.tools || [] };
+        if (idx >= 0) out.splice(Math.min(idx, out.length), 0, rec); else out.push(rec);
+      }
+      return out;
+    } catch (e) { return list || []; }
   }
-  async function saveSystemPrompts(p) { LS.set('ss_prompts', p || []); if (state.user) await pushKey('system_prompts', p || []); return true; }
+  async function getSystemPrompts() {
+    let saved = null;
+    if (state.user) { const r = await pullKey('system_prompts'); if (r.ok && Array.isArray(r.value)) { LS.set('ss_prompts', r.value); saved = r.value; } }
+    if (!saved) saved = LS.get('ss_prompts', null);
+    if (!saved || !saved.length) saved = (window.__defaultPrompts || []).slice();
+    return withContentPrompts(saved);
+  }
+  async function saveSystemPrompts(p) { const own = (p || []).filter(x => !/^content-/.test(x.id || '')); LS.set('ss_prompts', own); if (state.user) await pushKey('system_prompts', own); return true; }
 
   // ── Claude chat, straight from the phone; mirrors services/claude.js (cached system, web search, pause_turn) ──
   function parseActions(text) {
@@ -104,7 +121,10 @@
     const apiKey = opts.apiKey || LS.get('ss_api_key', null);
     if (!apiKey) return { success: false, error: 'No API key. Add it in Settings.' };
     const model = opts.model || 'claude-opus-5';
-    const body = { model, max_tokens: 16000, system: [{ type: 'text', text: opts.systemPrompt || 'You are a helpful assistant.', cache_control: { type: 'ephemeral' } }], messages: opts.messages || [] };
+    const system = [{ type: 'text', text: opts.systemPrompt || 'You are a helpful assistant.', cache_control: { type: 'ephemeral' } }];
+    const brainCtx = opts.brainContext != null ? opts.brainContext : (opts.useBrain ? brainContext() : '');
+    if (brainCtx) system.push({ type: 'text', text: brainCtx, cache_control: { type: 'ephemeral' } });
+    const body = { model, max_tokens: 16000, system, messages: opts.messages || [] };
     if ((opts.tools || []).includes('web_search')) body.tools = [/opus-5|opus-4-[678]|sonnet-5|sonnet-4-6|fable/.test(model) ? { type: 'web_search_20260209', name: 'web_search', max_uses: 15 } : { type: 'web_search_20250305', name: 'web_search', max_uses: 15 }];
     const post = async () => {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -124,7 +144,10 @@
       if (!text) return { success: false, error: 'Model returned no text (stop_reason: ' + r.stop_reason + ')' };
       const sources = [];
       for (const b of (r.content || [])) if (b.type === 'web_search_tool_result' && Array.isArray(b.content)) for (const s of b.content) if (s && s.url) sources.push(s.url);
-      return { success: true, content: text, actions: parseActions(text), usage: r.usage, stopReason: r.stop_reason, sources, contentApplied: [] };
+      const actions = parseActions(text);
+      let contentApplied = [];
+      if (opts.useBrain && actions.length) { try { contentApplied = contentApplyActions(actions, { source: 'chat', conversationId: opts.conversationId }); } catch (e) {} }
+      return { success: true, content: text, actions, usage: r.usage, stopReason: r.stop_reason, sources, contentApplied };
     } catch (e) { return { success: false, error: e.message }; }
   }
   // file attach: a real picker, text files read in the browser (same shape the Mac returns)
@@ -176,6 +199,105 @@
     if (localStamp > (r.value._updatedAt || 0)) crmSchedulePush();
   }
 
+  // ── AI Brain: read-only mirror the Mac pushes to cloud key 'brain' (v1.9.1 contentEngine.pushBrain) ──
+  const BRAIN_TTL = 10 * 60 * 1000;
+  state.brain = LS.get('ss_brain', null); state.brainAt = 0;
+  async function brainPull(force) {
+    if (!state.user) return state.brain;
+    if (!force && state.brain && Date.now() - state.brainAt < BRAIN_TTL) return state.brain;
+    const r = await pullKey('brain');
+    if (r.ok && r.value) { state.brain = r.value; state.brainAt = Date.now(); LS.set('ss_brain', r.value); }
+    else if (r.ok) state.brainAt = Date.now();
+    return state.brain;
+  }
+  function brainContext() {
+    const b = state.brain; if (!b || !b.context) return '';
+    // the Mac's index of the bank can lag the phone; append what the phone holds so Claude never duplicates an idea
+    let ctx = b.context;
+    if (state.content) {
+      const list = state.content.list().slice(0, 40).map(r => '- [' + r.id + '] ' + (r.title || '').slice(0, 80) + ' (' + r.stage + ')').join('\n');
+      if (list) ctx = ctx.replace(/### CONTENT BANK[\s\S]*$/, '') + '### CONTENT BANK (what already exists, do not duplicate)\n' + list;
+    }
+    return ctx;
+  }
+  function brainStatus() {
+    const b = state.brain;
+    if (!b) return { available: false, web: true, cloud: true, docs: {}, path: '', configuredPath: '', bankCount: 0, inboxCount: 0, convoInboxCount: 0, hint: 'Open Surreal Studios on a Mac once (v1.9.1 or newer) and the brain appears here.' };
+    const docs = {}; for (const k in (b.docs || {})) { const d = b.docs[k]; docs[k] = { file: d.file, exists: !!d.exists, size: d.size || 0, mtime: d.mtime }; }
+    const age = b.updatedAt ? Math.round((Date.now() - b.updatedAt) / 60000) : null;
+    return { available: true, web: true, cloud: true, docs, path: 'Surreal Cloud · mirrored from ' + (b.device || 'your Mac') + (age != null ? (age < 2 ? ' just now' : age < 120 ? ' ' + age + 'm ago' : ' ' + Math.round(age / 60) + 'h ago') : ''), configuredPath: b.path || '', bankCount: b.bankCount || 0, inboxCount: b.inboxCount || 0, convoInboxCount: b.convoInboxCount || 0, updatedAt: b.updatedAt };
+  }
+
+  // ── Content Engine: the real content.js on a localStorage disk, cloud key 'content', same per-record merge ──
+  const C = () => window.__content, P = () => window.__contentPrompts;
+  const running = new Map();
+  function initContent() {
+    if (state.content || !C() || !C().ContentStore) return;
+    state.content = new (C().ContentStore)({ storePath: 'web', log, onChange: (why, payload) => { fire('content', Object.assign({ reason: why }, payload && payload.id ? { id: payload.id } : {})); contentSchedulePush(); } });
+  }
+  function contentSchedulePush() { if (state.contentPushTimer) clearTimeout(state.contentPushTimer); state.contentPushTimer = setTimeout(() => { state.contentPushTimer = null; contentPush().catch(() => {}); }, 2500); }
+  async function contentPush() { if (!state.content || !state.user) return; const r = await pullKey('content'); if (r.ok && r.value) state.content.applyRemote(r.value); const p = await pushKey('content', state.content.snapshot()); if (!p.ok) log('content push failed: ' + p.error); }
+  async function contentPull(reason) {
+    initContent(); if (!state.content || !state.user) return;
+    const r = await pullKey('content'); if (!r.ok) return;
+    if (!r.value) { await contentPush(); return; }
+    const localStamp = state.content.snapshot()._updatedAt || 0;
+    state.content.applyRemote(r.value);
+    if (localStamp > (r.value._updatedAt || 0)) contentSchedulePush();
+  }
+  function contentApplyActions(actions, meta) {
+    initContent(); const store = state.content; if (!store) return [];
+    meta = meta || {}; const desc = [];
+    for (const a of (actions || [])) {
+      if (!a || !a.action) continue; const d = a.data || {};
+      try {
+        if (a.action === 'add_idea') { const r = store.upsert(Object.assign({}, d, { id: undefined, source: meta.source || 'chat', conversationId: meta.conversationId || '' })); desc.push('Idea: ' + r.title); }
+        else if (a.action === 'add_brief') {
+          const payload = Object.assign({}, d);
+          if (!payload.brief && (payload.corePoint || payload.spokenHooks)) payload.brief = payload;
+          if (payload.id && store.get(payload.id)) { const r = store.upsert(Object.assign({}, payload, { stage: payload.stage || 'brief' })); desc.push('Brief: ' + r.title); }
+          else { delete payload.id; const r = store.upsert(Object.assign({}, payload, { stage: 'brief', source: meta.source || 'chat', conversationId: meta.conversationId || '' })); desc.push('Brief: ' + r.title); }
+        }
+        else if (a.action === 'update_idea' && d.id && store.get(d.id)) { const r = store.upsert(d); desc.push('Updated: ' + r.title); }
+        else if (a.action === 'add_script' && d.id && store.get(d.id)) { const r = store.upsert({ id: d.id, script: d.script || '', post: d.post || {} }); desc.push('Script: ' + r.title); }
+        else if (a.action === 'add_research') {
+          if (d.id && store.get(d.id)) { const r = store.upsert({ id: d.id, research: d.research || {} }); desc.push('Research: ' + r.title); }
+          else if (d.research) { const r = store.upsert({ title: d.title || 'Viral scan ' + new Date().toISOString().slice(0, 10), research: d.research, stage: 'developing', tags: ['viral-scan'], source: meta.source || 'chat' }); desc.push('Research: ' + r.title); }
+        }
+        else if (a.action === 'set_stage' && d.id && store.get(d.id)) { const r = store.upsert({ id: d.id, stage: d.stage }); desc.push(r.title + ' → ' + r.stage); }
+      } catch (e) { log('content action failed (' + a.action + '): ' + e.message); }
+    }
+    return desc;
+  }
+  async function contentRun(id, step, extra) {
+    initContent(); const store = state.content, pr = P();
+    if (!store || !pr) return { success: false, error: 'Content engine not loaded' };
+    const spec = pr.PIPELINE[step]; if (!spec) return { success: false, error: 'unknown step ' + step };
+    const rec = id ? store.get(id) : null; if (id && !rec) return { success: false, error: 'idea not found' };
+    if (running.has(id || step)) return { success: false, error: 'already running' };
+    const apiKey = LS.get('ss_api_key', null); if (!apiKey) return { success: false, error: 'No API key. Add it in Settings.' };
+    running.set(id || step, step); fire('content', { reason: 'running', id, step });
+    try {
+      await brainPull(false);
+      const p = pr.get(spec.promptId);
+      const user = spec.build(rec || { id: '', title: extra || '', spark: extra || '' }, extra);
+      const r = await chat({ apiKey, model: store.config().model || 'claude-opus-5', systemPrompt: p.prompt, brainContext: brainContext(), messages: [{ role: 'user', content: user }], tools: spec.tools });
+      if (!r.success) return r;
+      const applied = contentApplyActions(r.actions, { source: 'pipeline:' + step });
+      if (rec) store.addActivity(rec.id, 'run', spec.label + (applied.length ? ': ' + applied.join(', ') : ' (no changes saved)'));
+      if (rec && step === 'viral' && r.sources && r.sources.length && !(store.get(rec.id).research || {}).sources) store.upsert({ id: rec.id, research: { sources: r.sources.slice(0, 15) } });
+      return { success: true, content: String(r.content || '').replace(/```json-action[\s\S]*?```/g, '').trim(), applied, usage: r.usage };
+    } catch (e) { return { success: false, error: e.message }; }
+    finally { running.delete(id || step); fire('content', { reason: 'done', id, step }); }
+  }
+  function contentListPayload() {
+    initContent(); const c = C(); const store = state.content;
+    const meta = c ? { stages: c.STAGES, stageLabels: c.STAGE_LABELS, types: c.TYPES, funnels: c.FUNNELS, funnelLabels: c.FUNNEL_LABELS, formats: c.FORMATS, platforms: c.PLATFORMS, closed: c.CLOSED } : {};
+    if (!store) return { records: [], config: {}, stats: {}, meta, web: true };
+    return { records: store.list(), config: store.config(), stats: store.stats(), meta, brain: brainStatus(), web: true };
+  }
+  listeners.content = [];
+
   const macOnly = (what) => async () => ({ ok: false, success: false, error: (what || 'This') + ' runs on your Mac, not on the phone.' });
 
   window.surreal = {
@@ -211,7 +333,7 @@
     cloudSignIn: async (email, password) => {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) return { ok: false, error: error.message };
-      await currentUser(); fire('status', status()); startPoll(); initCrm(); crmPull('signin').catch(() => {});
+      await currentUser(); fire('status', status()); startPoll(); initCrm(); crmPull('signin').catch(() => {}); contentPull('signin').catch(() => {}); brainPull(true).catch(() => {});
       return { ok: true, email };
     },
     cloudSignUp: async () => ({ ok: false, error: 'Sign-ups are closed. Use your Surreal Cloud login.' }),
@@ -232,8 +354,25 @@
     onCrmUpdate: (cb) => listeners.crm.push(cb),
     // Mac-only subsystems
     stayamoGeocode: macOnly('Stayamo search'), stayamoSearch: macOnly('Stayamo search'), stayamoPrompt: macOnly('Stayamo'), stayamoRecord: macOnly('Stayamo'), stayamoPayload: macOnly('Stayamo'), stayamoQuota: async () => ({ ok: false }),
-    contentList: async () => ({ ideas: [], records: [], config: {} }), contentUpsert: macOnly('Content'), contentDelete: macOnly('Content'), contentActivity: macOnly('Content'), contentConfig: async () => ({}), contentIngest: macOnly('Content'), contentApplyActions: macOnly('Content'), contentRun: macOnly('Content'), contentSyncNow: macOnly('Content'), contentPrompts: async () => ({}), onContentUpdate() {},
-    brainStatus: async () => ({ available: false, docs: {}, path: '', configuredPath: '', bankCount: 0, inboxCount: 0, convoInboxCount: 0, web: true }), brainSetPath: macOnly('Brain'), brainReadDoc: macOnly('Brain'), brainContextSize: async () => 0, brainOpen: macOnly('Brain'), brainNote: macOnly('Brain'),
+    // Content Engine (same store code as the Macs; Claude runs from the phone with the cloud-mirrored brain)
+    contentList: async () => contentListPayload(),
+    contentUpsert: async (rec) => { initContent(); return state.content && rec ? state.content.upsert(rec) : null; },
+    contentDelete: async (id) => { initContent(); return state.content ? state.content.remove(id) : false; },
+    contentActivity: async (id, type, text) => { initContent(); return state.content ? state.content.addActivity(id, type, text) : null; },
+    contentConfig: async (partial) => { initContent(); return state.content ? state.content.setConfig(partial) : {}; },
+    contentIngest: async (payload) => { initContent(); if (!state.content) return { added: 0, updated: 0 }; try { const raw = typeof payload === 'string' ? JSON.parse(payload) : payload; const items = Array.isArray(raw) ? raw : (raw.records || raw.ideas || raw.briefs || [raw]); return state.content.ingest(items, { source: 'paste' }); } catch (e) { return { added: 0, updated: 0, error: e.message }; } },
+    contentApplyActions: async (actions, conversationId) => contentApplyActions(actions, { source: 'chat', conversationId }),
+    contentRun: async (id, step, extra) => contentRun(id, step, extra),
+    contentSyncNow: async () => { await contentPull('manual'); await contentPush(); await brainPull(true); return { ok: true, inbox: { added: 0 }, count: state.content ? state.content.list().length : 0, web: true }; },
+    contentPrompts: async () => (P() ? P().PROMPTS.map(p => ({ id: p.id, name: p.name, brain: true, group: 'content', tools: p.tools || [] })) : []),
+    onContentUpdate: (cb) => listeners.content.push(cb),
+    // AI Brain (read-only mirror from the Mac)
+    brainStatus: async () => { await brainPull(false).catch(() => {}); return brainStatus(); },
+    brainSetPath: async () => { const s = brainStatus(); s.error = 'The brain folder lives on your Mac. The phone reads the copy your Mac mirrors to Surreal Cloud.'; return s; },
+    brainReadDoc: async (key) => { await brainPull(false).catch(() => {}); const b = state.brain; return b && b.docs && b.docs[key] ? b.docs[key].text || '' : ''; },
+    brainContextSize: async () => brainContext().length,
+    brainOpen: async () => false,
+    brainNote: macOnly('Brain notes'),
     studioConfig: async () => ({}), studioSetConfig: macOnly('Studio'), studioStyles: async () => [], studioStyleVerdict: macOnly('Studio'), studioStyleRequest: macOnly('Studio'), studioStyleRequests: async () => [], studioStyleRemove: macOnly('Studio'), studioResume: macOnly('Studio'), studioBrollIndex: macOnly('Studio'), studioRecordings: async () => [], studioJobs: async () => [], studioRunJob: macOnly('Studio'), studioPick: macOnly('Studio'), studioResult: macOnly('Studio'), studioObsConfig: async () => ({}), studioLaunchObs: macOnly('Studio'), studioRecorded: macOnly('Studio'), studioOpenPath: macOnly('Studio'), studioRevealPath: macOnly('Studio'), studioOpenTeleprompter: macOnly('Studio'), studioDraftPost: macOnly('Studio'), studioTeleprompterData: async () => ({}), onStudioUpdate() {}, onStudioTeleprompterSet() {},
     // updater (the web build updates itself on reload)
     getAppVersion: async () => WEB_VERSION, checkUpdatesNow: async () => ({ upToDate: true }), installUpdate: async () => ({ success: false, error: 'Reload the page to update.' }), onUpdateAvailable() {},
@@ -242,7 +381,7 @@
   // restore an existing session, then start the watchers; open sign-in if there is none
   (async () => {
     const u = await currentUser();
-    if (u) { startPoll(); initCrm(); crmPull('startup').catch(() => {}); }
+    if (u) { startPoll(); initCrm(); crmPull('startup').catch(() => {}); contentPull('startup').catch(() => {}); brainPull(true).catch(() => {}); }
     window.__ssReady = true;
     fire('status', status());
   })();

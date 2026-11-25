@@ -13,11 +13,12 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
-<script src="./vendor/supabase.js?v=20261125-0356"></script>
-<script src="./crm-web.js?v=20261125-0356"></script>
-<script src="./web-bridge.js?v=20261125-0356"></script>
+<script src="./vendor/supabase.js?v=20261125-0422"></script>
+<script src="./crm-web.js?v=20261125-0422"></script>
+<script src="./content-web.js?v=20261125-0422"></script>
+<script src="./web-bridge.js?v=20261125-0422"></script>
 <title>Surreal Studios</title>
-<!-- web build 20261125-0356 -->
+<!-- web build 20261125-0422 -->
 <link href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -217,7 +218,9 @@ body::after{content:'';position:fixed;inset:0;opacity:0.02;background-image:url(
 html{height:100%;}
 body{height:100dvh;min-height:-webkit-fill-available;}
 /* Mac-only surfaces never show in the browser build */
-.nav-item[data-page="content"],.nav-item[data-page="studio"],.nav-item[data-page="portal"],#stayamoDock,#airbnbDock,webview,.titlebar-controls{display:none!important;}
+.nav-item[data-page="studio"],.nav-item[data-page="portal"],#stayamoDock,#airbnbDock,webview,.titlebar-controls{display:none!important;}
+/* the brain folder lives on the Mac; the phone shows the mirrored copy, so the path controls go */
+#brainSettings label:has(+ #brainPathInput),#brainPathInput,#brainPathInput + div > button:not(:last-child){display:none!important;}
 .titlebar{-webkit-app-region:no-drag;}
 .titlebar-brand{padding-left:0!important;}
 #mDrawerBtn,#mnav,#mBackdrop,#mChipSlot{display:none;}
@@ -240,7 +243,7 @@ body{height:100dvh;min-height:-webkit-fill-available;}
   #mBackdrop.show{display:block;opacity:1;pointer-events:auto;}
   /* bottom nav */
   #mnav{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:8000;height:calc(var(--mnav) + env(safe-area-inset-bottom));padding:6px 6px calc(env(safe-area-inset-bottom) + 4px);background:rgba(36,36,36,.94);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-top:1px solid var(--border);}
-  #mnav button{flex:1;background:none;border:0;color:var(--dim);font-family:var(--f-body);font-size:10px;font-weight:600;letter-spacing:.2px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:10px;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+  #mnav button{flex:1;min-width:0;background:none;border:0;color:var(--dim);font-family:var(--f-body);font-size:9.5px;font-weight:600;letter-spacing:.2px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;border-radius:10px;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;}
   #mnav button span.i{font-size:17px;line-height:1;height:20px;display:flex;align-items:center;}
   #mnav button.active{color:var(--cream);}
   #mnav button.active span.i{color:var(--accent);}
@@ -590,13 +593,24 @@ function gymThisWeek(){const log=D.lifeOS?.gymLog||{};const wk=lifeWeekKey();let
 const LIFE_THEMES={1:'Metrics & Plan — pull last week’s numbers, pick ONE growth priority, 15-min sync with Dad. You run this meeting.',2:'Shoot Day — product photo/video, batch it: one setup, many products.',3:'Listings & SEO — rewrite weak titles, fix photos, worst performers with best potential first.',4:'Traffic Day — push demand: store socials, email past buyers, marketplace promos. One channel done properly.',5:'Ship & Report — schedule next week’s content, then the Friday Report to Dad. This is the leverage.'};
 function lifeWeekKey(d){d=d?new Date(d):new Date();const day=(d.getDay()+6)%7;const mon=new Date(d);mon.setDate(d.getDate()-day);return localDayKey(mon);}
 function ensureLife(){if(!D.lifeOS)D.lifeOS={weeks:{}};if(!D.lifeOS.weeks)D.lifeOS.weeks={};const k=lifeWeekKey();if(!D.lifeOS.weeks[k])D.lifeOS.weeks[k]={checks:Array(8).fill(false),moved:'',dodged:'',priority:''};return k;}
-function lifeWeekNum(k){const start=new Date('2026-07-20');const diff=Math.round((new Date(k)-start)/(7*86400000));return diff+1;}
+// THE ROAD as dates. The header, week count and gate follow whichever phase today falls in,
+// so the page never says "Summer Sprint" in winter. Edit here (or later in D.lifeOS.phases) when the plan changes.
+const LIFE_PHASES=[
+{id:'summer',name:'Summer Sprint',start:'2026-07-20',end:'2026-08-28',gate:'the Aug 28 gate',goals:'2 paying clients · 5 Friday Reports · 50 outreaches · Part 107 passed.'},
+{id:'fall',name:'Fall Stack',start:'2026-08-29',end:'2026-12-31',gate:'the Dec 31 gate',goals:'$1.5–2k/mo retainers · 75k followers · pay yourself first 20%.'},
+{id:'spring',name:'Decision Spring',start:'2027-01-01',end:'2027-05-31',gate:'graduation (May 31)',goals:'$3k/mo consistent = full-time. $5k buffer before graduation.'},
+{id:'horizon',name:'The Horizon',start:'2027-06-01',end:'2030-12-31',gate:'Japan',goals:'$10k/mo → Japan. Porsche fund after 12 months of $10k+. Freedom fund → family security → Dakar. In that order.'}
+];
+function lifePhases(){const ph=(D.lifeOS&&Array.isArray(D.lifeOS.phases)&&D.lifeOS.phases.length)?D.lifeOS.phases:LIFE_PHASES;return ph.map(x=>Object.assign({},x,{s:new Date(x.start+'T00:00:00'),e:new Date(x.end+'T23:59:59')}));}
+function lifePhase(d){d=d||new Date();const ph=lifePhases();return ph.find(x=>d>=x.s&&d<=x.e)||(d<ph[0].s?ph[0]:ph[ph.length-1]);}
+function lifeWeekNum(k){const ph=lifePhase(new Date(k+'T12:00:00'));const start=new Date(lifeWeekKey(ph.s)+'T00:00:00');const diff=Math.round((new Date(k+'T00:00:00')-start)/(7*86400000));return diff+1;}
+function lifeCalendarLine(){const now=new Date();const ph=lifePhase(now);const days=Math.max(0,Math.ceil((ph.e-now)/86400000));const wk=lifeWeekNum(lifeWeekKey(now));const total=Math.max(1,Math.round((ph.e-ph.s)/(7*86400000)));const date=now.toLocaleDateString('en-US',{weekday:'short',month:'short',day:'numeric'});const jan1=new Date(now.getFullYear(),0,1);const yearWeek=Math.ceil((((now-jan1)/86400000)+jan1.getDay()+1)/7);return {ph,days,wk,total,date,yearWeek,text:ph.name+' · Week '+wk+' of '+total+' · '+days+' day'+(days===1?'':'s')+' to '+ph.gate,sub:date+' · week '+yearWeek+' of '+now.getFullYear()};}
 async function toggleLifeCheck(i){const k=ensureLife();D.lifeOS.weeks[k].checks[i]=!D.lifeOS.weeks[k].checks[i];await saveD();renderLife();}
 async function saveLifeReset(){const k=ensureLife();const w=D.lifeOS.weeks[k];w.moved=document.getElementById('lifeMoved').value;w.dodged=document.getElementById('lifeDodged').value;w.priority=document.getElementById('lifePriority').value;await saveD();toast('Sunday Reset saved','success');renderLife();}
 function renderLife(){
 const k=ensureLife();const w=D.lifeOS.weeks[k];const score=w.checks.filter(Boolean).length;
 const wkNum=lifeWeekNum(k);
-const gate=new Date('2026-08-28');const daysToGate=Math.max(0,Math.ceil((gate-new Date())/86400000));
+const cal=lifeCalendarLine();const daysToGate=cal.days;
 // streak: consecutive past weeks (ending last week) with score >= 7
 const keys=Object.keys(D.lifeOS.weeks).sort();let streak=0;
 for(let i=keys.length-1;i>=0;i--){const kk=keys[i];if(kk===k)continue;const s=D.lifeOS.weeks[kk].checks.filter(Boolean).length;if(s>=7)streak++;else break;}
@@ -615,7 +629,7 @@ document.getElementById('lifeContent').innerHTML=`
 <div style="max-width:980px;margin:0 auto;padding:22px">
 <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
 <h1 style="margin:0">CARSON OS</h1>
-<div style="font-size:11px;opacity:.6">Summer Sprint · Week ${wkNum>0?wkNum:'—'} · ${daysToGate} days to the Aug 28 gate</div>
+<div style="text-align:right"><div style="font-size:11px;opacity:.6">${esc(cal.text)}</div><div style="font-size:10px;opacity:.4;margin-top:2px">${esc(cal.sub)}</div></div>
 </div>
 <div style="font-size:12px;opacity:.75;margin:8px 0 18px;font-style:italic">"I am not behind. I am becoming." — A life that is faithful, adventurous, loving, disciplined, and free.</div>
 
@@ -726,10 +740,7 @@ ${LIFE_RULES.map((r,i)=>`<div style="font-size:12px;padding:5px 0;opacity:.85"><
 <div class="crd" style="padding:18px;margin-bottom:30px">
 <h3 style="margin:0 0 10px">THE ROAD</h3>
 <div style="font-size:12px;line-height:1.7;opacity:.85">
-<b>Phase 1 · Summer Sprint</b> (now → Aug 28): 2 paying clients · 5 Friday Reports · 50 outreaches · Part 107 passed.<br>
-<b>Phase 2 · Fall Stack</b> (Sep–Dec): $1.5–2k/mo retainers · 75k followers · pay yourself first 20%.<br>
-<b>Phase 3 · Decision Spring</b> (Jan–May '27): $3k/mo consistent = full-time. $5k buffer before graduation.<br>
-<b>Horizon</b> ('27–'30): $10k/mo → Japan. Porsche fund opens after 12 months of $10k+. Freedom fund → family security → Dakar. In that order.
+${lifePhases().map((x,i)=>{const now=new Date();const cur=now>=x.s&&now<=x.e;const done=now>x.e;const span=x.s.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'})+' → '+x.e.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'});return `<div style="display:flex;gap:10px;align-items:baseline;${done?'opacity:.45':''}"><span style="width:14px;flex-shrink:0;color:${cur?'var(--accent)':done?'var(--green)':'var(--dim2)'}">${cur?'●':done?'✓':'○'}</span><div><b>${i<3?'Phase '+(i+1)+' · ':''}${esc(x.name)}</b> <span style="opacity:.55">(${span})</span>${cur?' <span style="font-size:9px;letter-spacing:1.5px;color:var(--accent);margin-left:4px">NOW</span>':''}: ${esc(x.goals)}</div></div>`;}).join('')}
 </div>
 </div>
 </div>`;
@@ -2126,7 +2137,7 @@ window.surreal.onStudioUpdate&&window.surreal.onStudioUpdate(()=>{if(S.page==='s
   sidebar.addEventListener('click', (e) => { if (narrow() && (e.target.closest('.nav-item') || e.target.closest('.conv-item') || e.target.closest('#newChatBtn'))) setTimeout(() => setDrawer(false), 120); });
 
   // bottom nav
-  const PAGES = [['dashboard', '◈', 'Finances'], ['life', '▲', 'Life'], ['outreach', '✈', 'Outreach'], ['chat', '◎', 'Chat'], ['settings', '⚙', 'Settings']];
+  const PAGES = [['dashboard', '◈', 'Finances'], ['life', '▲', 'Life'], ['outreach', '✈', 'Outreach'], ['content', '▶', 'Content'], ['chat', '◎', 'Chat'], ['settings', '⚙', 'Settings']];
   const mnav = mk('nav', { id: 'mnav' });
   const btns = {};
   for (const [p, icon, label] of PAGES) {
@@ -2138,7 +2149,7 @@ window.surreal.onStudioUpdate&&window.surreal.onStudioUpdate(()=>{if(S.page==='s
   const paintNav = () => { const cur = (typeof S !== 'undefined' && S.page) || 'dashboard'; for (const p in btns) btns[p].classList.toggle('active', p === cur); };
   paintNav(); setInterval(paintNav, 400);
   // if the drawer was used to reach a Mac-only page, bounce home
-  const guard = () => { const cur = typeof S !== 'undefined' && S.page; if (['content', 'studio', 'portal'].includes(cur)) { try { nav('dashboard'); } catch (e) {} } };
+  const guard = () => { const cur = typeof S !== 'undefined' && S.page; if (['studio', 'portal'].includes(cur)) { try { nav('dashboard'); } catch (e) {} } };
   setInterval(guard, 600);
 
   // cloud chip: on phones it lives in the titlebar, not over the content
